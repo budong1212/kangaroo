@@ -321,14 +321,6 @@ impl KangarooSolver {
             );
         }
 
-        // Read back DP count and process if any found
-        // TODO: Optimization: Use double buffering for async readback.
-        // Currently we block here waiting for GPU to finish execution and transfer data.
-        // With double buffering, we could dispatch the next batch while waiting for
-        // the previous one, keeping GPU fully occupied.
-        // Needs:
-        // 1. Two sets of buffers (or at least staging buffers)
-        // 2. State machine to manage "Dispatch A -> Read B -> Dispatch B -> Read A"
         let dp_count = self.read_dp_count()?;
         if dp_count > 0 {
             // Copy DP buffer for readback
@@ -380,7 +372,8 @@ impl KangarooSolver {
             tx.send(result).unwrap();
         });
 
-        self.ctx.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        // wgpu 0.20: use Maintain::Wait instead of PollType::wait_indefinitely()
+        self.ctx.device.poll(wgpu::Maintain::Wait);
         rx.recv()??;
 
         let data = slice.get_mapped_range();
@@ -401,7 +394,8 @@ impl KangarooSolver {
             tx.send(result).unwrap();
         });
 
-        self.ctx.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        // wgpu 0.20: use Maintain::Wait instead of PollType::wait_indefinitely()
+        self.ctx.device.poll(wgpu::Maintain::Wait);
         rx.recv()??;
 
         let data = slice.get_mapped_range();
@@ -508,7 +502,8 @@ impl KangarooSolver {
         }
 
         self.ctx.queue.submit(Some(encoder.finish()));
-        self.ctx.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        // wgpu 0.20: use Maintain::Wait instead of PollType::wait_indefinitely()
+        self.ctx.device.poll(wgpu::Maintain::Wait);
     }
 }
 
