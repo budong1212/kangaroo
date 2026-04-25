@@ -272,8 +272,8 @@ impl KangarooSolver {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        // wgpu 28: PollType::wait_indefinitely() blocks until GPU work is done
-        self.ctx.device.poll(wgpu::PollType::wait_indefinitely());
+        // wgpu 0.20: Maintain::Wait blocks until GPU work is done
+        self.ctx.device.poll(wgpu::Maintain::Wait);
         rx.recv()??;
         let data = slice.get_mapped_range();
         let count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
@@ -290,8 +290,8 @@ impl KangarooSolver {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        // wgpu 28: PollType::wait_indefinitely() blocks until GPU work is done
-        self.ctx.device.poll(wgpu::PollType::wait_indefinitely());
+        // wgpu 0.20: Maintain::Wait blocks until GPU work is done
+        self.ctx.device.poll(wgpu::Maintain::Wait);
         rx.recv()??;
         let data = slice.get_mapped_range();
         let dp_bytes = &data[4..];
@@ -356,8 +356,8 @@ impl KangarooSolver {
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
         self.ctx.queue.submit(Some(encoder.finish()));
-        // wgpu 28: PollType::wait_indefinitely() returns MaintainResult (not unwrappable)
-        self.ctx.device.poll(wgpu::PollType::wait_indefinitely());
+        // wgpu 0.20: Maintain::Wait blocks until GPU work is done
+        self.ctx.device.poll(wgpu::Maintain::Wait);
     }
 }
 
