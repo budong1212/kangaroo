@@ -106,7 +106,7 @@ impl KangarooPipeline {
         info!("Pipeline layout created");
 
         info!("Creating compute pipeline...");
-        // wgpu 0.20: entry_point is &str (not Option<&str>), no `cache` field
+        // wgpu 0.20: entry_point is &str, compilation_options required, no cache field
         let pipeline = ctx
             .device
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -114,6 +114,7 @@ impl KangarooPipeline {
                 layout: Some(&pipeline_layout),
                 module: &shader,
                 entry_point: "main",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             });
         info!("Compute pipeline created");
 
