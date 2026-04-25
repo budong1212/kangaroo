@@ -10,9 +10,9 @@ keywords = ["bitcoin", "ecdlp", "kangaroo", "gpu", "secp256k1"]
 categories = ["cryptography", "command-line-utilities"]
 
 [dependencies]
-# GPU Compute
-wgpu = "28"
-pollster = "0.4"
+# GPU Compute — wgpu 0.20 is the last stable release without windows-rs version conflicts on Windows
+wgpu = "0.20"
+pollster = "0.3"
 bytemuck = { version = "1.19", features = ["derive"] }
 
 # Crypto
