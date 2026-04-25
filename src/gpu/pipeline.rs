@@ -104,25 +104,25 @@ impl KangarooPipeline {
         info!("Bind group layout created");
 
         info!("Creating pipeline layout...");
+        // wgpu 0.20: PipelineLayoutDescriptor has no immediate_size field
         let pipeline_layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Kangaroo Pipeline Layout"),
                 bind_group_layouts: &[&bind_group_layout],
-                immediate_size: 0,
+                push_constant_ranges: &[],
             });
         info!("Pipeline layout created");
 
         info!("Creating compute pipeline...");
+        // wgpu 0.20: entry_point is &str (not Option<&str>), no cache field
         let pipeline = ctx
             .device
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("Kangaroo Compute Pipeline"),
                 layout: Some(&pipeline_layout),
                 module: &shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
+                entry_point: "main",
             });
         info!("Compute pipeline created");
 
