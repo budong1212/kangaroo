@@ -14,12 +14,14 @@ pub struct GpuContext {
 
 impl GpuContext {
     pub async fn new(device_index: u32) -> Result<Self> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        // wgpu 0.20: Instance::new takes InstanceDescriptor by value (not reference)
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
 
-        let mut adapters: Vec<_> = instance.enumerate_adapters(wgpu::Backends::all()).await;
+        // wgpu 0.20: enumerate_adapters returns Vec synchronously, no .await
+        let mut adapters: Vec<_> = instance.enumerate_adapters(wgpu::Backends::all());
 
         // Prefer discrete > virtual > integrated > cpu/other
         adapters.sort_by_key(|a| match a.get_info().device_type {
@@ -41,15 +43,13 @@ impl GpuContext {
 
         let adapter_info = adapter.get_info();
 
+        // wgpu 0.20: DeviceDescriptor has no memory_hints field
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("gpu-crypto"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
-                // memory_hints is a newer feature (wgpu 22+), ensuring we use recent version
-                memory_hints: wgpu::MemoryHints::Performance, 
-                ..Default::default()
-            })
+            }, None)
             .await
             .context("Failed to create GPU device")?;
 
@@ -85,18 +85,18 @@ impl GpuContext {
         let workgroup_size = 64u32;
         // Conservative limit to prevent TDR (Timeout Detection and Recovery) on Windows
         // or just freezing the screen on Linux
-        let workgroups = self.max_workgroups().min(65535).min(4096); 
+        let workgroups = self.max_workgroups().min(65535).min(4096);
         workgroup_size * workgroups
     }
-    
+
     pub fn compute_units(&self) -> u32 {
         self.max_workgroups()
     }
-    
+
     pub fn optimal_kangaroos(&self) -> u32 {
         self.optimal_batch_size()
     }
-    
+
     pub fn optimal_steps_per_call(&self) -> u32 {
         // Extremely conservative default for heavy shaders
         16
@@ -134,21 +134,22 @@ impl GpuContext {
     /// Read data from a mappable buffer (async)
     pub async fn read_buffer<T: bytemuck::Pod + Clone>(&self, buffer: &wgpu::Buffer, offset: u64, count: u64) -> Result<Vec<T>> {
         let size = count * std::mem::size_of::<T>() as u64;
-        let slice = buffer.slice(offset..offset+size);
-        
+        let slice = buffer.slice(offset..offset + size);
+
         let (tx, rx) = futures::channel::oneshot::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        
-        self.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+
+        // wgpu 0.20: poll returns MaintainResult (not Result), use Maintain::Wait
+        self.device.poll(wgpu::Maintain::Wait);
         rx.await??;
-        
+
         let data = slice.get_mapped_range();
         let result: Vec<T> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         buffer.unmap();
-        
+
         Ok(result)
     }
 }
