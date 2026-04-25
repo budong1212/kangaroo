@@ -17,7 +17,6 @@ impl KangarooPipeline {
     /// Create the compute pipeline
     pub fn new(ctx: &GpuContext) -> Result<Self> {
         info!("Loading shader sources...");
-        // Use shared shaders from internal gpu_crypto module
         let field = crate::gpu_crypto::shaders::FIELD_WGSL;
         let curve = crate::gpu_crypto::shaders::CURVE_JACOBIAN_WGSL;
         let kangaroo = include_str!("../shaders/kangaroo_jacobian.wgsl");
@@ -27,13 +26,11 @@ impl KangarooPipeline {
         info!("Shader module created");
 
         info!("Creating bind group layout...");
-        // Create bind group layout
         let bind_group_layout =
             ctx.device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some("Kangaroo Bind Group Layout"),
                     entries: &[
-                        // Config (uniform)
                         wgpu::BindGroupLayoutEntry {
                             binding: 0,
                             visibility: wgpu::ShaderStages::COMPUTE,
@@ -44,7 +41,6 @@ impl KangarooPipeline {
                             },
                             count: None,
                         },
-                        // Jump points (storage, read_only)
                         wgpu::BindGroupLayoutEntry {
                             binding: 1,
                             visibility: wgpu::ShaderStages::COMPUTE,
@@ -55,7 +51,6 @@ impl KangarooPipeline {
                             },
                             count: None,
                         },
-                        // Jump distances (storage, read_only)
                         wgpu::BindGroupLayoutEntry {
                             binding: 2,
                             visibility: wgpu::ShaderStages::COMPUTE,
@@ -66,7 +61,6 @@ impl KangarooPipeline {
                             },
                             count: None,
                         },
-                        // Kangaroos (storage, read_write)
                         wgpu::BindGroupLayoutEntry {
                             binding: 3,
                             visibility: wgpu::ShaderStages::COMPUTE,
@@ -77,7 +71,6 @@ impl KangarooPipeline {
                             },
                             count: None,
                         },
-                        // DP buffer (storage, read_write)
                         wgpu::BindGroupLayoutEntry {
                             binding: 4,
                             visibility: wgpu::ShaderStages::COMPUTE,
@@ -88,7 +81,6 @@ impl KangarooPipeline {
                             },
                             count: None,
                         },
-                        // DP count (storage, read_write atomic)
                         wgpu::BindGroupLayoutEntry {
                             binding: 5,
                             visibility: wgpu::ShaderStages::COMPUTE,
@@ -104,7 +96,6 @@ impl KangarooPipeline {
         info!("Bind group layout created");
 
         info!("Creating pipeline layout...");
-        // wgpu 0.20: PipelineLayoutDescriptor has no immediate_size field
         let pipeline_layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -115,14 +106,16 @@ impl KangarooPipeline {
         info!("Pipeline layout created");
 
         info!("Creating compute pipeline...");
-        // wgpu 0.20: entry_point is &str (not Option<&str>), no cache field
+        // wgpu 28: entry_point is Option<&str>, compilation_options is required
         let pipeline = ctx
             .device
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("Kangaroo Compute Pipeline"),
                 layout: Some(&pipeline_layout),
                 module: &shader,
-                entry_point: "main",
+                entry_point: Some("main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
             });
         info!("Compute pipeline created");
 
