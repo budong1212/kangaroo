@@ -10,8 +10,9 @@ keywords = ["bitcoin", "ecdlp", "kangaroo", "gpu", "secp256k1"]
 categories = ["cryptography", "command-line-utilities"]
 
 [dependencies]
-# GPU Compute — wgpu 0.20 is the last stable release without windows-rs version conflicts on Windows
-wgpu = "0.20"
+# GPU Compute — pinned to =0.20 to avoid wgpu-hal 28 + gpu-allocator 0.28 windows-rs version conflict
+# wgpu 28 pulls in windows-core 0.58 and 0.62 simultaneously, causing E0277/E0308 compile errors
+wgpu = "=0.20.1"
 pollster = "0.3"
 bytemuck = { version = "1.19", features = ["derive"] }
 
