@@ -51,7 +51,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      # Windows: install Vulkan SDK so wgpu Vulkan backend links correctly (AMD/NVIDIA)
       - name: Install Vulkan SDK (Windows)
         if: matrix.os == 'windows-latest'
         uses: humbletim/install-vulkan-sdk@v1.1.1
@@ -59,7 +58,6 @@ jobs:
           version: 1.3.268.0
           cache: true
 
-      # Linux: install Vulkan loader + dev headers
       - name: Install Vulkan dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -111,24 +109,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Write release notes to file
+        run: |
+          BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M UTC')
+          cat > release_notes.md << 'EOF'
+          ## Auto Build
+
+          **GPU Support:** AMD (Vulkan / DX12) · NVIDIA (Vulkan / DX12) · Intel
+
+          ### Windows Usage
+          ```
+          kangaroo-windows-x64-amd-nvidia.exe --pubkey <pubkey-hex> --start <start-hex> --range <bits>
+          ```
+
+          ### Notes
+          - AMD GPU: install AMD Driver (includes Vulkan/DX12, no extra install needed)
+          - NVIDIA GPU: driver >= 520 required
+          - Requires Windows 10/11 (64-bit)
+          EOF
+
       - name: Create Release with all binaries
         run: |
           gh release create latest \
             --title "Latest Build ($(date -u '+%Y-%m-%d %H:%M UTC') | ${{ steps.sha.outputs.short }})" \
-            --notes "## Auto Build
-
-**GPU Support:** AMD (Vulkan / DX12) · NVIDIA (Vulkan / DX12) · Intel
-
-### Windows Usage
-\`\`\`
-kangaroo-windows-x64-amd-nvidia.exe --pubkey <compressed-pubkey-hex> --start <start-hex> --range <bits>
-\`\`\`
-
-### Notes
-- AMD GPU: install [AMD Driver](https://www.amd.com/en/support) (includes Vulkan/DX12, no extra install needed)
-- NVIDIA GPU: driver >= 520 required
-- Requires Windows 10/11 (64-bit)
-" \
+            --notes-file release_notes.md \
             --prerelease \
             dist/kangaroo-windows-x64-amd-nvidia.exe/kangaroo-windows-x64-amd-nvidia.exe \
             dist/kangaroo-linux-x64/kangaroo-linux-x64 \
