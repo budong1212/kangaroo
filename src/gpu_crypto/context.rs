@@ -79,13 +79,14 @@ impl GpuContext {
         self.limits.max_compute_workgroups_per_dimension
     }
 
-    /// Optimal batch size heuristic
+    /// Optimal batch size heuristic — AMD/NVIDIA tuned
+    /// AMD GCN/RDNA: up to 65535 workgroups supported, use 8192 for good occupancy
+    /// without hitting TDR on Windows.
     pub fn optimal_batch_size(&self) -> u32 {
-        // Heuristic: use large batches for better GPU utilization
         let workgroup_size = 64u32;
-        // Conservative limit to prevent TDR (Timeout Detection and Recovery) on Windows
-        // or just freezing the screen on Linux
-        let workgroups = self.max_workgroups().min(65535).min(4096);
+        // Increased from 4096 to 8192 for better AMD/NVIDIA occupancy.
+        // Still well below the 65535 wgpu limit and TDR threshold.
+        let workgroups = self.max_workgroups().min(65535).min(8192);
         workgroup_size * workgroups
     }
 
@@ -97,9 +98,10 @@ impl GpuContext {
         self.optimal_batch_size()
     }
 
+    /// Conservative starting point for calibration; solver.rs will probe higher.
+    /// Raised from 16 to 256 — modern AMD/NVIDIA via Vulkan handle this easily.
     pub fn optimal_steps_per_call(&self) -> u32 {
-        // Extremely conservative default for heavy shaders
-        16
+        256
     }
 
     /// Create an uninitialized buffer of type T with count elements

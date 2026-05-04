@@ -253,11 +253,28 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     };
 
     let start_time = Instant::now();
+    let mut last_speed_update = Instant::now();
 
     loop {
         let result = solver.step()?;
         let total_ops = solver.total_operations();
         pb.set_position(total_ops);
+
+        // Update progress bar message with current speed every ~500ms
+        if last_speed_update.elapsed().as_millis() >= 500 {
+            let ops_per_sec = solver.current_ops_per_sec;
+            if ops_per_sec > 0.0 {
+                let speed_str = if ops_per_sec >= 1_000_000.0 {
+                    format!("{:.2} Mop/s", ops_per_sec / 1_000_000.0)
+                } else if ops_per_sec >= 1_000.0 {
+                    format!("{:.1} Kop/s", ops_per_sec / 1_000.0)
+                } else {
+                    format!("{:.0} op/s", ops_per_sec)
+                };
+                pb.set_message(speed_str);
+            }
+            last_speed_update = Instant::now();
+        }
 
         if let Some(private_key) = result {
             let duration = start_time.elapsed();
@@ -296,10 +313,13 @@ pub fn run(args: Args) -> anyhow::Result<()> {
             } else if args.quiet {
                 println!("{}", key_hex_display);
             } else {
+                let time_seconds = duration.as_secs_f64();
+                let final_speed = total_ops as f64 / time_seconds;
                 info!("Private key found: 0x{}", key_hex_display);
                 info!("Verification: SUCCESS");
                 info!("Total operations: {}", total_ops);
-                info!("Time elapsed: {:.2}s", duration.as_secs_f64());
+                info!("Time elapsed: {:.2}s", time_seconds);
+                info!("Average speed: {:.2} Mop/s", final_speed / 1_000_000.0);
             }
 
             if let Some(ref output) = args.output {
