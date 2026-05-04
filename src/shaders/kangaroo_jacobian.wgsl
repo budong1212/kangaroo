@@ -1,14 +1,27 @@
 // =============================================================================
-// Pollard's Kangaroo Algorithm - GPU Kernel (Pure Jacobian, No Per-Step Inversion)
+// Pollard's Kangaroo Algorithm - GPU Kernel (Pure Jacobian)
 // =============================================================================
-// KEY OPTIMIZATION: Removed per-step batch inversion entirely.
-// All steps run in pure Jacobian coordinates — each thread is fully independent.
-// No workgroup barriers, no shared memory, no thread 0 bottleneck.
 //
-// DP check uses Jacobian X low bits as a fast approximate filter.
-// CPU verifies true affine X via full inversion only when a DP is found.
+// ALGORITHM CONTRACT:
+//   Tame kangaroo i:  position = (start + offset_i) * G,  dist = offset_i
+//   Wild  kangaroo i: position = pubkey,                   dist = 0
 //
-// Expected speedup: 10-50x over the previous batch-inversion design.
+//   After collision (same affine X, different ktype):
+//     start + tame_dist = key + wild_dist
+//     => key = start + tame_dist - wild_dist
+//
+// STEP ORDER (critical for dist/point consistency):
+//   1. Select jump index from current Jacobian X low byte
+//   2. Add jump point  (point advances)
+//   3. Add jump dist   (dist advances to match new point)
+//   4. Check DP on NEW point X low bits
+//   5. If DP: store (Jacobian X, Z, dist) for CPU affine conversion
+//
+// DP detection uses Jacobian X[0] low bits as a FAST PROXY.
+// Because Z changes randomly every step, X_jac low bits are uniformly
+// distributed, giving a valid (approximate) DP filter.
+// CPU does the true affine X = X_jac * Z_jac^{-2} and uses that for
+// collision detection — so false positives just waste a little CPU time.
 // =============================================================================
 
 struct Config {
@@ -38,38 +51,36 @@ struct DistinguishedPoint {
     kangaroo_id: u32,
 }
 
-@group(0) @binding(0) var<uniform> config: Config;
-@group(0) @binding(1) var<storage, read> jump_points: array<AffinePoint, 256>;
-@group(0) @binding(2) var<storage, read> jump_distances: array<array<u32, 8>, 256>;
-@group(0) @binding(3) var<storage, read_write> kangaroos: array<Kangaroo>;
-@group(0) @binding(4) var<storage, read_write> dp_buffer: array<DistinguishedPoint>;
-@group(0) @binding(5) var<storage, read_write> dp_count: atomic<u32>;
+@group(0) @binding(0) var<uniform>            config:         Config;
+@group(0) @binding(1) var<storage, read>      jump_points:    array<AffinePoint, 256>;
+@group(0) @binding(2) var<storage, read>      jump_distances: array<array<u32, 8>, 256>;
+@group(0) @binding(3) var<storage, read_write> kangaroos:     array<Kangaroo>;
+@group(0) @binding(4) var<storage, read_write> dp_buffer:     array<DistinguishedPoint>;
+@group(0) @binding(5) var<storage, read_write> dp_count:      atomic<u32>;
 
-// Store DP — saves raw Jacobian (X, Z); CPU does affine conversion + verify
+// Store DP — saves raw Jacobian (X, Z) + dist; CPU converts to affine X.
 fn store_dp(k: Kangaroo, p: JacobianPoint, kangaroo_id: u32) {
     let idx = atomicAdd(&dp_count, 1u);
     if (idx < 65536u) {
         var dp: DistinguishedPoint;
-        dp.x    = p.x;
-        dp.z    = p.z;
-        dp.dist = k.dist;
-        dp.ktype = k.ktype;
+        dp.x          = p.x;
+        dp.z          = p.z;
+        dp.dist       = k.dist;
+        dp.ktype      = k.ktype;
         dp.kangaroo_id = kangaroo_id;
         dp_buffer[idx] = dp;
     }
 }
 
-// DP condition: use Jacobian X low 32-bit limb as a fast proxy.
-// Since Z is random each step, X_jacobian low bits are uniform — valid filter.
-// Adjust dp_mask_lo.x externally to target the desired DP rate.
+// DP condition: use Jacobian X low 32-bit limb as a fast proxy filter.
+// x[0] is least-significant limb (LE layout). Low bits are uniform.
 fn is_dp(p: JacobianPoint) -> bool {
     return (p.x[0] & config.dp_mask_lo.x) == 0u;
 }
 
 @compute @workgroup_size(64)
 fn main(
-    @builtin(global_invocation_id)   global_id:    vec3<u32>,
-    @builtin(local_invocation_id)    local_id_vec: vec3<u32>
+    @builtin(global_invocation_id) global_id: vec3<u32>,
 ) {
     let kid = global_id.x;
     if (kid >= config.num_kangaroos) { return; }
@@ -77,7 +88,6 @@ fn main(
     var k: Kangaroo = kangaroos[kid];
     if (k.is_active == 0u) { return; }
 
-    // Load current Jacobian point
     var p: JacobianPoint;
     p.x = k.x;
     p.y = k.y;
@@ -86,27 +96,26 @@ fn main(
     var dp_stored = false;
 
     for (var step = 0u; step < config.steps_per_call; step++) {
-        // --- DP check on Jacobian X (no inversion needed) ---
-        if (!dp_stored && is_dp(p)) {
-            store_dp(k, p, kid);
-            dp_stored = true;
-        }
-
-        // --- Select jump using Jacobian X low byte ---
-        // x[0] is the least-significant 32 bits; low byte gives 256 entries.
-        // In Jacobian coordinates x[0] distributes uniformly — valid selector.
+        // 1. Select jump index from current Jacobian X low byte
         let jump_idx = p.x[0] & 0xFFu;
         let jp = jump_points[jump_idx];
         let jd = jump_distances[jump_idx];
 
-        // --- Mixed Jacobian+Affine point addition (NO inversion) ---
+        // 2. Advance point
         p = jac_add_affine(p, jp.x, jp.y);
 
-        // --- Update distance ---
+        // 3. Advance dist to match new point
         k.dist = scalar_add_256(k.dist, jd);
+
+        // 4. Check DP on NEW point (only store one DP per dispatch to avoid
+        //    the same kangaroo flooding the buffer after finding a DP)
+        if (!dp_stored && is_dp(p)) {
+            store_dp(k, p, kid);
+            dp_stored = true;
+        }
     }
 
-    // Write back
+    // Write back updated position and dist
     k.x = p.x;
     k.y = p.y;
     k.z = p.z;
