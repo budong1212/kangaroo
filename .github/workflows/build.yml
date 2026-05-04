@@ -19,17 +19,14 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: kangaroo-windows-x64-amd-nvidia.exe
-            binary: target/x86_64-pc-windows-msvc/release/kangaroo.exe
 
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: kangaroo-linux-x64
-            binary: target/x86_64-unknown-linux-gnu/release/kangaroo
 
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: kangaroo-macos-x64
-            binary: target/x86_64-apple-darwin/release/kangaroo
 
     steps:
       - uses: actions/checkout@v4
@@ -58,12 +55,12 @@ jobs:
 
       - name: Copy binary (Windows)
         if: matrix.os == 'windows-latest'
-        run: copy ${{ matrix.binary }} ${{ matrix.artifact }}
-        shell: cmd
+        shell: pwsh
+        run: Copy-Item "target\${{ matrix.target }}\release\kangaroo.exe" "${{ matrix.artifact }}"
 
       - name: Copy binary (Unix)
         if: matrix.os != 'windows-latest'
-        run: cp ${{ matrix.binary }} ${{ matrix.artifact }}
+        run: cp target/${{ matrix.target }}/release/kangaroo ${{ matrix.artifact }}
 
       - uses: actions/upload-artifact@v4
         with:
