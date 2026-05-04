@@ -1,9 +1,4 @@
 //! Kangaroo: Pollard's Kangaroo ECDLP solver using Vulkan/Metal/DX12 compute
-//!
-//! GPU-accelerated implementation for solving the Elliptic Curve Discrete
-//! Logarithm Problem on secp256k1 within a known range.
-//!
-//! Supports AMD, NVIDIA, Intel GPUs via wgpu (Vulkan/Metal/DX12).
 
 mod cli;
 mod convert;
@@ -24,9 +19,6 @@ use serde::Serialize;
 use std::time::Instant;
 use tracing::{error, info};
 
-/// Pollard's Kangaroo ECDLP solver for secp256k1
-///
-/// Finds private key k such that P = k*G, given that k is in range [start, start + 2^range_bits]
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
@@ -102,7 +94,6 @@ where
 }
 
 pub fn run(args: Args) -> anyhow::Result<()> {
-    // Configure tracing
     cli::init_tracing(false, args.quiet || args.json);
 
     if !args.quiet && !args.json {
@@ -112,33 +103,23 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         info!("Search range: {} bits from 0x{}", args.range, args.start);
     }
 
-    // Parse inputs (common for both CPU and GPU)
     let pubkey = crypto::parse_pubkey(&args.pubkey)?;
     let start = crypto::parse_hex_u256(&args.start)?;
     let range_bits = args.range;
 
     if args.cpu {
-        // CPU MODE
         if !args.quiet && !args.json {
             info!("Mode: CPU (Software Solver)");
         }
-
-        // Determine DP bits (CPU needs fewer bits for table efficiency)
         let dp_bits = args.dp_bits.unwrap_or_else(|| {
             (range_bits / 2).saturating_sub(2).clamp(8, 20)
         });
-
         if !args.quiet && !args.json {
             info!("DP bits: {}", dp_bits);
         }
-
-        // start is [u8; 32] (little-endian in lib internal, need BE for cpu_solver)
         let mut start_be = start;
         start_be.reverse();
-
         let mut solver = cpu::CpuKangarooSolver::new_full(pubkey.clone(), start_be, range_bits, dp_bits);
-
-        // Progress bar for CPU
         let expected_ops = (1u128 << (range_bits / 2)) as u64;
         let pb = if args.quiet || args.json {
             ProgressBar::hidden()
@@ -147,22 +128,18 @@ pub fn run(args: Args) -> anyhow::Result<()> {
             pb.set_style(cli::default_progress_style_with_msg());
             pb
         };
-
         let start_time = Instant::now();
-        let result = solver.solve(std::time::Duration::from_secs(3600)); // 1 hour timeout
+        let result = solver.solve(std::time::Duration::from_secs(3600));
         let duration = start_time.elapsed();
-
         if let Some(private_key) = result {
             pb.finish_with_message("FOUND!");
             let key_hex = hex::encode(&private_key);
             let key_hex_trimmed = key_hex.trim_start_matches('0');
             let key_hex_display = if key_hex_trimmed.is_empty() { "0" } else { key_hex_trimmed };
-
             if args.json {
                 let total_ops = solver.total_ops();
                 let time_seconds = duration.as_secs_f64();
                 let rate = total_ops as f64 / time_seconds;
-
                 let result = BenchmarkResult {
                     metric: "hash_rate".to_string(),
                     value: rate,
@@ -184,11 +161,9 @@ pub fn run(args: Args) -> anyhow::Result<()> {
                 info!("Total operations: {}", solver.total_ops());
                 info!("Time elapsed: {:.2}s", duration.as_secs_f64());
             }
-
             if let Some(ref output) = args.output {
                 std::fs::write(output, &key_hex)?;
             }
-
             return Ok(());
         } else {
             pb.finish_with_message("TIMEOUT");
@@ -204,24 +179,29 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         info!("Compute units: {}", gpu_context.compute_units());
     }
 
-    // Parse inputs
     let pubkey = crypto::parse_pubkey(&args.pubkey)?;
     let start = crypto::parse_hex_u256(&args.start)?;
     let range_bits = args.range;
-
-    // Auto-configure DP bits
     let num_k = args.kangaroos.unwrap_or(gpu_context.optimal_kangaroos());
+
+    // DP bits: target ~1 DP per kangaroo per dispatch batch.
+    // dp_bits controls how often a thread finds a distinguished point.
+    // With pure Jacobian DP check (no inversion), we use x[0] low bits.
+    // A 20-bit mask means ~1/1M chance per step — reasonable rate.
+    // For range_bits >= 64 use 20, for smaller ranges scale down.
     let dp_bits = args.dp_bits.unwrap_or_else(|| {
-        let auto_dp = (range_bits / 2).saturating_sub((num_k as f64).log2() as u32 / 2);
-        auto_dp.clamp(8, 40)
+        // target: each kangaroo hits a DP roughly every 2^dp_bits steps
+        // want enough DPs to fill table: ~2 * sqrt(2^range) total
+        // dp_bits ~ range/2 / log2(num_k) clamped to [12, 24]
+        let auto = (range_bits / 2).saturating_sub(((num_k as f64).log2() as u32) / 2);
+        auto.clamp(12, 24)
     });
 
     if !args.quiet && !args.json {
-        info!("DP bits: {}", dp_bits);
+        info!("DP bits: {} (mask={:#010x})", dp_bits, (1u32 << dp_bits).wrapping_sub(1));
         info!("Kangaroos: {}", num_k);
     }
 
-    // Create kangaroo solver
     let mut solver = solver::KangarooSolver::new(
         gpu_context,
         pubkey.clone(),
@@ -231,7 +211,6 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         num_k,
     )?;
 
-    // Progress bar
     let expected_ops = (1u128 << (range_bits / 2)) as u64;
     let pb = if args.quiet || args.json {
         ProgressBar::hidden()
@@ -241,17 +220,11 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         pb
     };
 
-    // Main loop
     if !args.quiet && !args.json {
         info!("Starting search...");
     }
 
-    let max_ops = if args.max_ops == 0 {
-        u64::MAX
-    } else {
-        args.max_ops
-    };
-
+    let max_ops = if args.max_ops == 0 { u64::MAX } else { args.max_ops };
     let start_time = Instant::now();
     let mut last_speed_update = Instant::now();
 
@@ -260,7 +233,6 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         let total_ops = solver.total_operations();
         pb.set_position(total_ops);
 
-        // Update progress bar message with current speed every ~500ms
         if last_speed_update.elapsed().as_millis() >= 500 {
             let ops_per_sec = solver.current_ops_per_sec;
             if ops_per_sec > 0.0 {
@@ -281,13 +253,8 @@ pub fn run(args: Args) -> anyhow::Result<()> {
             pb.finish_with_message("FOUND!");
             let key_hex = hex::encode(&private_key);
             let key_hex_trimmed = key_hex.trim_start_matches('0');
-            let key_hex_display = if key_hex_trimmed.is_empty() {
-                "0"
-            } else {
-                key_hex_trimmed
-            };
+            let key_hex_display = if key_hex_trimmed.is_empty() { "0" } else { key_hex_trimmed };
 
-            // Verify
             if !crypto::verify_key(&private_key, &pubkey) {
                 error!("Verification FAILED - this is a bug!");
                 continue;
@@ -296,7 +263,6 @@ pub fn run(args: Args) -> anyhow::Result<()> {
             if args.json {
                 let time_seconds = duration.as_secs_f64();
                 let rate = total_ops as f64 / time_seconds;
-
                 let result = BenchmarkResult {
                     metric: "hash_rate".to_string(),
                     value: rate,
@@ -328,18 +294,13 @@ pub fn run(args: Args) -> anyhow::Result<()> {
                     info!("Result written to: {}", output);
                 }
             }
-
             return Ok(());
         }
 
-        // Check max operations limit
         if total_ops >= max_ops {
             pb.finish_with_message("LIMIT REACHED");
             if !args.quiet && !args.json {
-                info!(
-                    "Maximum operations reached ({}) without finding key",
-                    max_ops
-                );
+                info!("Maximum operations reached ({}) without finding key", max_ops);
             }
             return Err(anyhow::anyhow!("Key not found within {} operations", max_ops));
         }
