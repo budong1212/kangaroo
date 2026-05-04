@@ -1,6 +1,4 @@
 //! GPU-accelerated Kangaroo solver
-//!
-//! Coordinates GPU compute with CPU collision detection.
 
 use crate::cpu::init::{generate_jump_table, initialize_kangaroos};
 use crate::cpu::DPTable;
@@ -14,10 +12,9 @@ use std::time::Instant;
 use tracing::info;
 
 const MAX_DISTINGUISHED_POINTS: u32 = 65_536;
-/// Target dispatch time in milliseconds (stay under TDR threshold)
-const TARGET_DISPATCH_MS: u128 = 50;
+/// Stay well under Windows TDR (default 2s). 20ms gives huge safety margin.
+const TARGET_DISPATCH_MS: u128 = 20;
 
-/// Shared resources for batch mode (pipeline created once, reused)
 #[allow(dead_code)]
 pub struct SharedResources {
     pub ctx: GpuContext,
@@ -32,7 +29,6 @@ impl SharedResources {
     }
 }
 
-/// Main Kangaroo solver
 pub struct KangarooSolver {
     ctx: GpuContext,
     pipeline: KangarooPipeline,
@@ -42,10 +38,8 @@ pub struct KangarooSolver {
     num_kangaroos: u32,
     #[allow(dead_code)]
     steps_per_call: u32,
-    /// Track time for speed reporting
     speed_timer: Instant,
     speed_ops_snapshot: u64,
-    /// Current measured speed in ops/s (updated every ~1s)
     pub current_ops_per_sec: f64,
 }
 
@@ -242,7 +236,7 @@ impl KangarooSolver {
         self.ctx.queue.submit(Some(encoder.finish()));
         self.total_ops += (self.num_kangaroos as u64) * (self.steps_per_call as u64);
 
-        // Update speed measurement every ~1 second
+        // Update speed every ~1s
         let elapsed_speed = self.speed_timer.elapsed();
         if elapsed_speed.as_millis() >= 1000 {
             let ops_delta = self.total_ops - self.speed_ops_snapshot;
@@ -251,17 +245,13 @@ impl KangarooSolver {
             self.speed_timer = Instant::now();
         }
 
-        // Log progress every ~10M ops
         if self.total_ops % 10_000_000 < (self.num_kangaroos as u64 * self.steps_per_call as u64) {
             let (tame, wild) = self.dp_table.count_by_type();
             let speed_mops = self.current_ops_per_sec / 1_000_000.0;
             tracing::info!(
                 "Ops: {}M | Speed: {:.2} Mop/s | DPs: {} ({} tame, {} wild)",
-                self.total_ops / 1_000_000,
-                speed_mops,
-                self.dp_table.total_dps(),
-                tame,
-                wild
+                self.total_ops / 1_000_000, speed_mops,
+                self.dp_table.total_dps(), tame, wild
             );
         }
 
@@ -298,7 +288,6 @@ impl KangarooSolver {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        // wgpu 0.20: Maintain::Wait blocks until GPU work is done
         self.ctx.device.poll(wgpu::Maintain::Wait);
         rx.recv()??;
         let data = slice.get_mapped_range();
@@ -316,7 +305,6 @@ impl KangarooSolver {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        // wgpu 0.20: Maintain::Wait blocks until GPU work is done
         self.ctx.device.poll(wgpu::Maintain::Wait);
         rx.recv()??;
         let data = slice.get_mapped_range();
@@ -336,15 +324,12 @@ impl KangarooSolver {
         Ok(())
     }
 
-    /// Calibrate steps_per_call by timing increasingly large dispatches.
-    /// Extended candidates up to 8192 for AMD/NVIDIA Vulkan which can handle
-    /// much more work per dispatch than the old conservative 512 cap.
+    /// Calibrate steps_per_call by timing dispatches.
+    /// Threshold lowered to 20ms (was 50ms) to stay far from Windows TDR.
     fn calibrate(&mut self, dp_bits: u32, verbose: bool) {
-        // Extended range: AMD RDNA/GCN cards via Vulkan can do 2048-8192 steps
-        // per call well within the 50ms TDR-safe window.
-        let candidates = [64u32, 128, 256, 512, 1024, 2048, 4096, 8192];
+        let candidates = [16u32, 32, 64, 128, 256, 512, 1024, 2048];
         let mut best_steps = candidates[0];
-        if verbose { info!("Calibrating GPU performance (extended range for AMD/NVIDIA)..."); }
+        if verbose { info!("Calibrating GPU (TDR-safe, target <{}ms per dispatch)...", TARGET_DISPATCH_MS); }
         for &steps in &candidates {
             let max_steps = Self::select_steps_per_call(steps, self.num_kangaroos, dp_bits, MAX_DISTINGUISHED_POINTS);
             if max_steps < steps { break; }
@@ -357,12 +342,12 @@ impl KangarooSolver {
                 _padding: 0,
             };
             self.ctx.queue.write_buffer(&self.buffers.config_buffer, 0, bytemuck::bytes_of(&config));
-            // Warm-up dispatch (not timed)
+            // Warm-up
             self.dispatch_once();
             let start = Instant::now();
             self.dispatch_once();
             let elapsed_ms = start.elapsed().as_millis();
-            if verbose { info!("  steps_per_call={}: {}ms", steps, elapsed_ms); }
+            if verbose { info!("  steps={}: {}ms", steps, elapsed_ms); }
             if elapsed_ms <= TARGET_DISPATCH_MS {
                 best_steps = steps;
             } else {
@@ -391,7 +376,6 @@ impl KangarooSolver {
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
         self.ctx.queue.submit(Some(encoder.finish()));
-        // wgpu 0.20: Maintain::Wait blocks until GPU work is done
         self.ctx.device.poll(wgpu::Maintain::Wait);
     }
 }

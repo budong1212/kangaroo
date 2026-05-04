@@ -14,16 +14,13 @@ pub struct GpuContext {
 
 impl GpuContext {
     pub async fn new(device_index: u32) -> Result<Self> {
-        // wgpu 0.20: Instance::new takes InstanceDescriptor by value (not reference)
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
 
-        // wgpu 0.20: enumerate_adapters returns Vec synchronously, no .await
         let mut adapters: Vec<_> = instance.enumerate_adapters(wgpu::Backends::all());
 
-        // Prefer discrete > virtual > integrated > cpu/other
         adapters.sort_by_key(|a| match a.get_info().device_type {
             wgpu::DeviceType::DiscreteGpu => 0,
             wgpu::DeviceType::VirtualGpu => 1,
@@ -43,7 +40,6 @@ impl GpuContext {
 
         let adapter_info = adapter.get_info();
 
-        // wgpu 0.20: DeviceDescriptor has no memory_hints field
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("gpu-crypto"),
@@ -79,14 +75,12 @@ impl GpuContext {
         self.limits.max_compute_workgroups_per_dimension
     }
 
-    /// Optimal batch size heuristic — AMD/NVIDIA tuned
-    /// AMD GCN/RDNA: up to 65535 workgroups supported, use 8192 for good occupancy
-    /// without hitting TDR on Windows.
+    /// Safe batch size: 4096 workgroups x 64 = 262144 kangaroos.
+    /// Keeps single dispatch well under Windows TDR (2s default).
+    /// 524288 (8192 wg) was triggering device-lost on AMD Radeon Pro VII.
     pub fn optimal_batch_size(&self) -> u32 {
         let workgroup_size = 64u32;
-        // Increased from 4096 to 8192 for better AMD/NVIDIA occupancy.
-        // Still well below the 65535 wgpu limit and TDR threshold.
-        let workgroups = self.max_workgroups().min(65535).min(8192);
+        let workgroups = self.max_workgroups().min(65535).min(4096);
         workgroup_size * workgroups
     }
 
@@ -98,13 +92,12 @@ impl GpuContext {
         self.optimal_batch_size()
     }
 
-    /// Conservative starting point for calibration; solver.rs will probe higher.
-    /// Raised from 16 to 256 — modern AMD/NVIDIA via Vulkan handle this easily.
+    /// Conservative starting point for calibration.
+    /// Calibration will probe upward automatically.
     pub fn optimal_steps_per_call(&self) -> u32 {
-        256
+        16
     }
 
-    /// Create an uninitialized buffer of type T with count elements
     pub fn create_buffer<T: bytemuck::Pod>(&self, label: &str, usage: wgpu::BufferUsages, count: u64) -> wgpu::Buffer {
         let size = count * std::mem::size_of::<T>() as u64;
         self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -115,7 +108,6 @@ impl GpuContext {
         })
     }
 
-    /// Create a buffer initialized with data
     pub fn create_buffer_init<T: bytemuck::Pod>(&self, label: &str, usage: wgpu::BufferUsages, data: &[T]) -> wgpu::Buffer {
         self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label),
@@ -124,7 +116,6 @@ impl GpuContext {
         })
     }
 
-    /// Create a shader module from multiple source strings
     pub fn create_shader_module(&self, label: &str, sources: &[&str]) -> wgpu::ShaderModule {
         let source = sources.join("\n\n");
         self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -133,7 +124,6 @@ impl GpuContext {
         })
     }
 
-    /// Read data from a mappable buffer (async)
     pub async fn read_buffer<T: bytemuck::Pod + Clone>(&self, buffer: &wgpu::Buffer, offset: u64, count: u64) -> Result<Vec<T>> {
         let size = count * std::mem::size_of::<T>() as u64;
         let slice = buffer.slice(offset..offset + size);
@@ -143,7 +133,6 @@ impl GpuContext {
             tx.send(result).unwrap();
         });
 
-        // wgpu 0.20: poll returns MaintainResult (not Result), use Maintain::Wait
         self.device.poll(wgpu::Maintain::Wait);
         rx.await??;
 
