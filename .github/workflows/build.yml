@@ -1,9 +1,12 @@
-name: Build Release Binaries
+name: Build & Release
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -15,18 +18,18 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: kangaroo-windows-x64.exe
-            binary: target/release/kangaroo.exe
+            artifact: kangaroo-windows-x64-amd-nvidia.exe
+            binary: target/x86_64-pc-windows-msvc/release/kangaroo.exe
 
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: kangaroo-linux-x64
-            binary: target/release/kangaroo
+            binary: target/x86_64-unknown-linux-gnu/release/kangaroo
 
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: kangaroo-macos-x64
-            binary: target/release/kangaroo
+            binary: target/x86_64-apple-darwin/release/kangaroo
 
     steps:
       - name: Checkout repository
@@ -48,21 +51,87 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      # Windows: install Vulkan SDK so wgpu Vulkan backend links correctly (AMD/NVIDIA)
+      - name: Install Vulkan SDK (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: humbletim/install-vulkan-sdk@v1.1.1
+        with:
+          version: 1.3.268.0
+          cache: true
+
+      # Linux: install Vulkan loader + dev headers
+      - name: Install Vulkan dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libvulkan-dev vulkan-tools libvulkan1
+
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: "-C target-cpu=x86-64-v2"
 
       - name: Rename binary (Windows)
         if: matrix.os == 'windows-latest'
-        run: copy target\${{ matrix.target }}\release\kangaroo.exe ${{ matrix.artifact }}
+        run: copy ${{ matrix.binary }} ${{ matrix.artifact }}
         shell: cmd
 
       - name: Rename binary (Unix)
         if: matrix.os != 'windows-latest'
-        run: cp target/${{ matrix.target }}/release/kangaroo ${{ matrix.artifact }}
+        run: cp ${{ matrix.binary }} ${{ matrix.artifact }}
 
-      - name: Upload artifact
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
           retention-days: 30
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Get short commit SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Delete old 'latest' release and tag if exists
+        run: |
+          gh release delete latest --yes || true
+          git push origin :refs/tags/latest || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release with all binaries
+        run: |
+          gh release create latest \
+            --title "Latest Build ($(date -u '+%Y-%m-%d %H:%M UTC') | ${{ steps.sha.outputs.short }})" \
+            --notes "## Auto Build
+
+**GPU Support:** AMD (Vulkan / DX12) · NVIDIA (Vulkan / DX12) · Intel
+
+### Windows Usage
+\`\`\`
+kangaroo-windows-x64-amd-nvidia.exe --pubkey <compressed-pubkey-hex> --start <start-hex> --range <bits>
+\`\`\`
+
+### Notes
+- AMD GPU: install [AMD Driver](https://www.amd.com/en/support) (includes Vulkan/DX12, no extra install needed)
+- NVIDIA GPU: driver >= 520 required
+- Requires Windows 10/11 (64-bit)
+" \
+            --prerelease \
+            dist/kangaroo-windows-x64-amd-nvidia.exe/kangaroo-windows-x64-amd-nvidia.exe \
+            dist/kangaroo-linux-x64/kangaroo-linux-x64 \
+            dist/kangaroo-macos-x64/kangaroo-macos-x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
